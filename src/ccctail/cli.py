@@ -124,9 +124,31 @@ class CacheTracker:
                     elif part.get("type") == "text":
                         parts.append(part.get("text", ""))
                     elif part.get("type") == "tool_use":
-                        parts.append(f"[{part.get('name', 'tool')}]")
+                        name = part.get("name", "tool")
+                        inp = part.get("input", {})
+                        file_path = inp.get("file_path", "")
+                        pattern = inp.get("pattern", "")
+                        base_path = inp.get("path", "")
+                        command = inp.get("command", "")
+                        url = inp.get("url", "")
+                        query = inp.get("query", "")
+                        if file_path:
+                            obj = file_path
+                        elif pattern:
+                            obj = (
+                                str(Path(base_path) / pattern) if base_path else pattern
+                            )
+                        elif command:
+                            obj = command[:60]
+                        elif url:
+                            obj = url
+                        elif query:
+                            obj = query
+                        else:
+                            obj = ""
+                        parts.append(f"[{name}] {obj}" if obj else f"[{name}]")
                     elif part.get("type") == "thinking":
-                        parts.append("[thinking]")
+                        pass  # fall back to last user prompt
                 elif isinstance(part, str):
                     parts.append(part)
             return " ".join(p for p in parts if p).replace("\n", " ").strip()
@@ -140,7 +162,8 @@ class CacheTracker:
 
     def _print_record(self, record: dict) -> None:
         if self.fmt == "plain":
-            if self.line_count % 10 == 1:
+            if sys.stdout.isatty() and self.line_count % 10 == 1:
+                print("-" * 132)
                 print(HEADER)
                 print("-" * 132)
             proj = record["project"]
@@ -236,9 +259,15 @@ class CacheTracker:
         cum_total = self.cum_hits + self.cum_misses
         cum_ratio = (self.cum_hits / cum_total * 100) if cum_total > 0 else 0
 
-        content_preview = current_content or self.last_user_content.get(
-            project_name, "N/A"
-        )
+        if current_content:
+            if msg_type == "assistant":
+                content_preview = f"[Assistant] {current_content}"
+            else:
+                content_preview = current_content
+        else:
+            content_preview = (
+                f"[User] {self.last_user_content.get(project_name, 'N/A')}"
+            )
 
         record = {
             "hits": cr,
@@ -335,8 +364,8 @@ def main(lines: str, dump_all: bool, fmt: str, do_follow: bool):
 
     if not quiet:
         click.echo(f"Monitoring Claude Code cache logs in {TARGET_DIR}...")
-        click.echo(HEADER)
-        click.echo("-" * 132)
+        # click.echo(HEADER)
+        # click.echo("-" * 132)
 
     if not quiet:
         if lines_option == "+1" or dump_all:

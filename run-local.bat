@@ -1,1 +1,1 @@
-uv run ccctail %*
+uv -q run ccctail %*

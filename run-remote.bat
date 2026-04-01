@@ -1,1 +1,1 @@
-uvx ccctail %*
+uvx -q ccctail %*
