@@ -4,7 +4,6 @@
 Install `uv`
 
 ## How to run (Method 1)
-Run
 ```
 uvx --isolated --python 3.12 --from git+https://github.com/tayaee/track-claude-code-cache-hits.git track_claude_code_cache_hits
 ```
