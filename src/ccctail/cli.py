@@ -371,7 +371,7 @@ def main(lines: str, dump_all: bool, fmt: str, do_follow: bool):
         if lines_option == "+1" or dump_all:
             click.echo("Dumping all existing logs...")
         else:
-            click.echo(f"Dumping existing logs with lines={lines_option}...")
+            click.echo(f"Dumping existing logs with --lines={lines_option}...")
 
     dump_existing_logs(tracker, lines_option)
 
