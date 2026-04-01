@@ -1,0 +1,16 @@
+[project]
+name = "track-claude-code-cache-hits"
+version = "0.1.0"
+description = "Track Claude Code Cache Status (hits/misses)"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "watchdog>=6.0.0",
+]
+
+[project.scripts]
+track_claude_code_cache_hits = "track_claude_code_cache_hits.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

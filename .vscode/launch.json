@@ -1,0 +1,21 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run CLI: track_claude_code_cache_hits",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "track_claude_code_cache_hits.cli",
+            "console": "integratedTerminal",
+            "preLaunchTask": "uv-sync"
+        },
+        {
+            "name": "Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "preLaunchTask": "uv-sync"
+        }
+    ]
+}
