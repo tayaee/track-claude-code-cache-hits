@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import click
@@ -13,12 +14,13 @@ TARGET_DIR = Path.home() / ".claude" / "projects"
 
 
 HEADER = (
-    f"{'Hits':>12} | {'Misses':>12} | {'Ratio':>5} | "
+    f"{'Timestamp':<24} | {'Hits':>12} | {'Misses':>12} | {'Ratio':>5} | "
     f"{'Cum-hits':>14} | {'Cum-misses':>14} | {'Cum-ratio':>9} | "
     f"{'Project':<32} | Content"
 )
 
 CSV_COLUMNS = [
+    "timestamp",
     "hits",
     "misses",
     "ratio",
@@ -73,6 +75,18 @@ def dump_existing_logs(tracker, lines_option=None):
     if display_count is not None:
         tracker.buffering = True
 
+    # Sort by timestamp when dumping all (--all)
+    if display_count is None:
+
+        def _entry_timestamp(entry):
+            try:
+                d = json.loads(entry[1].strip())
+                return d.get("timestamp", "")
+            except (json.JSONDecodeError, IndexError):
+                return ""
+
+        entries.sort(key=_entry_timestamp)
+
     for project_name, line in entries:
         tracker.process_line(project_name, line)
 
@@ -86,7 +100,7 @@ def dump_existing_logs(tracker, lines_option=None):
 
 
 class CacheTracker:
-    def __init__(self, fmt: str = "plain"):
+    def __init__(self, fmt: str = "plain", since: str | None = None):
         self.project_stats: dict[str, dict[str, int]] = {}
         self.cum_hits: int = 0
         self.cum_misses: int = 0
@@ -98,6 +112,10 @@ class CacheTracker:
         self.fmt: str = fmt
         self._csv_writer: csv.writer | None = None
         self._csv_header_written: bool = False
+        self.since: datetime | None = None
+        if since:
+            dt = datetime.fromisoformat(since)
+            self.since = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
         if fmt == "csv":
             self._csv_writer = csv.writer(sys.stdout)
@@ -162,14 +180,17 @@ class CacheTracker:
 
     def _print_record(self, record: dict) -> None:
         if self.fmt == "plain":
-            if sys.stdout.isatty() and self.line_count % 10 == 1:
-                print("-" * 132)
+            if (sys.stdout.isatty() and self.line_count % 10 == 1) or (not sys.stdout.isatty() and self.line_count == 1):
+                print("-" * 159)
                 print(HEADER)
-                print("-" * 132)
+                print("-" * 159)
             proj = record["project"]
             if len(proj) > 32:
                 proj = proj[:15] + ".." + proj[-15:]
+            ts = record["timestamp"]
+            ts_display = ts
             print(
+                f"{ts_display:<24} | "
                 f"{record['hits']:>12,} | {record['misses']:>12,} | "
                 f"{record['ratio']:>4.0f}% | "
                 f"{record['cum_hits']:>14,} | {record['cum_misses']:>14,} | "
@@ -183,6 +204,7 @@ class CacheTracker:
                 self._csv_header_written = True
             self._csv_writer.writerow(
                 [
+                    record["timestamp"],
                     record["hits"],
                     record["misses"],
                     round(record["ratio"], 2),
@@ -212,8 +234,19 @@ class CacheTracker:
         except json.JSONDecodeError:
             return
 
+        timestamp = d.get("timestamp", "")
         msg_type = d.get("type", "")
         message = d.get("message", {})
+
+        if self.since and timestamp:
+            try:
+                ts_dt = datetime.fromisoformat(timestamp)
+                if ts_dt.tzinfo is None:
+                    ts_dt = ts_dt.replace(tzinfo=timezone.utc)
+                if ts_dt < self.since:
+                    return
+            except ValueError:
+                pass
 
         # Extract content for user messages (skip meta/tool-result noise)
         if msg_type == "user" and message.get("role") == "user":
@@ -270,6 +303,7 @@ class CacheTracker:
             )
 
         record = {
+            "timestamp": timestamp,
             "hits": cr,
             "misses": cc,
             "ratio": round(ratio, 2),
@@ -345,7 +379,14 @@ class LogHandler(FileSystemEventHandler):
     default=False,
     help="Follow new log entries (like tail -f).",
 )
-def main(lines: str, dump_all: bool, fmt: str, do_follow: bool):
+@click.option(
+    "--since",
+    "since",
+    type=str,
+    default=None,
+    help="Show only entries at or after this ISO 8601 timestamp (e.g. 2026-04-01T17:59:51.854Z).",
+)
+def main(lines: str, dump_all: bool, fmt: str, do_follow: bool, since: str | None):
     if not TARGET_DIR.exists():
         click.echo(f"Error: Directory {TARGET_DIR} does not exist.")
         return
@@ -360,7 +401,7 @@ def main(lines: str, dump_all: bool, fmt: str, do_follow: bool):
     quiet = fmt != "plain"
     follow = do_follow and fmt == "plain"
 
-    tracker = CacheTracker(fmt=fmt)
+    tracker = CacheTracker(fmt=fmt, since=since)
 
     if not quiet:
         click.echo(f"Monitoring Claude Code cache logs in {TARGET_DIR}...")
