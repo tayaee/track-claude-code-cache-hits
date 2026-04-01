@@ -12,7 +12,7 @@ TARGET_DIR = Path.home() / ".claude" / "projects"
 HEADER = (
     f"{'Hits':>12} | {'Misses':>12} | {'Ratio':>5} | "
     f"{'Cum-hits':>14} | {'Cum-misses':>14} | {'Cum-ratio':>9} | "
-    f"{'Project':<15} | Request"
+    f"{'Project':<32} | Request"
 )
 
 
@@ -65,13 +65,13 @@ class CacheTracker:
 
         if self.line_count % 10 == 0:
             print(HEADER)
-            print("-" * 115)
+            print("-" * 132)
         self.line_count += 1
 
         print(
             f"{cr:>12,} | {cc:>12,} | {ratio:>4.0f}% | "
             f"{self.cum_hits:>14,} | {self.cum_misses:>14,} | {cum_ratio:>8.0f}% | "
-            f"{project_name[:15]:<15} | "
+            f"{project_name[:32]:<32} | "
             f"{content_preview}"
         )
 
@@ -112,7 +112,7 @@ def main():
 
     print(f"Monitoring Claude Code cache logs in {TARGET_DIR}...")
     print(HEADER)
-    print("-" * 115)
+    print("-" * 132)
     tracker = CacheTracker()
     handler = LogHandler(tracker)
     observer = Observer()
