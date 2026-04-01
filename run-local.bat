@@ -1,0 +1,1 @@
+uv run claude_code_cache %*
