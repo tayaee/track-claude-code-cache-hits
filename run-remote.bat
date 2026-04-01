@@ -1,1 +1,1 @@
-uvx --isolated --python 3.12 --from git+https://github.com/tayaee/ccctail.git claude_code_cache %*
+uvx ccctail %*

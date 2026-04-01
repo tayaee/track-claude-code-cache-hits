@@ -2,10 +2,10 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Run CLI: claude_code_cache",
+            "name": "Run CLI: ccctail",
             "type": "debugpy",
             "request": "launch",
-            "module": "claude_code_cache.cli",
+            "module": "ccctail.cli",
             "console": "integratedTerminal",
             "preLaunchTask": "uv-sync"
         },

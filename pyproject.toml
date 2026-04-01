@@ -1,6 +1,6 @@
 [project]
 name = "ccctail"
-version = "0.1.1"
+version = "0.1.2"
 description = "Claude Code Cache Tail - View Claude Code Cache Hits and Misses"
 readme = "README.md"
 requires-python = ">=3.10"
