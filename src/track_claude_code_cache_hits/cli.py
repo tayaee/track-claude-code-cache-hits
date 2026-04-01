@@ -33,7 +33,13 @@ class CacheTracker:
 
         message = d.get("message", {})
         if d.get("type") == "user" and message.get("role") == "user":
-            content = message.get("content", "").replace("\n", " ")
+            raw = message.get("content", "")
+            if isinstance(raw, list):
+                raw = " ".join(
+                    part.get("text", "") if isinstance(part, dict) else str(part)
+                    for part in raw
+                )
+            content = raw.replace("\n", " ")
             self.last_user_content[project_name] = content[:50]
             return
 
