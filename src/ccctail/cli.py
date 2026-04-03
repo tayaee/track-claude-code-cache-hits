@@ -3,7 +3,9 @@ import json
 import os
 import sys
 import time
+import unicodedata
 from datetime import datetime, timezone
+from importlib.metadata import version as pkg_version
 from pathlib import Path
 
 import click
@@ -12,24 +14,111 @@ from watchdog.observers import Observer
 
 TARGET_DIR = Path.home() / ".claude" / "projects"
 
-
-HEADER = (
-    f"{'Timestamp':<24} | {'Hits':>12} | {'Misses':>12} | {'Ratio':>5} | "
-    f"{'Cum-hits':>14} | {'Cum-misses':>14} | {'Cum-ratio':>9} | "
-    f"{'Project':<32} | Content"
-)
-
-CSV_COLUMNS = [
+ALL_COLUMNS = [
     "timestamp",
     "hits",
     "misses",
     "ratio",
-    "cum_hits",
-    "cum_misses",
-    "cum_ratio",
+    "cum-hits",
+    "cum-misses",
+    "cum-ratio",
     "project",
     "content",
 ]
+
+DEFAULT_COLUMNS = ["timestamp", "hits", "misses", "ratio", "project", "content"]
+
+COLUMN_SPECS: dict[str, tuple[str, int]] = {
+    "timestamp": ("<", 24),
+    "hits": (">", 8),
+    "misses": (">", 6),
+    "ratio": (">", 5),
+    "cum-hits": (">", 12),
+    "cum-misses": (">", 12),
+    "cum-ratio": (">", 9),
+    "project": ("<", 25),
+    "content": ("<", 80),
+}
+
+
+def _format_cell(col: str, val) -> str:
+    if col in ("hits", "misses", "cum-hits", "cum-misses"):
+        return f"{val:,}"
+    if col in ("ratio", "cum-ratio"):
+        return f"{val:.0f}%"
+    if col == "project":
+        max_w = COLUMN_SPECS["project"][1]
+        s = str(val)
+        if len(s) > max_w:
+            half = (max_w - 2) // 2
+            return s[:half] + ".." + s[-half:]
+        return s
+    return str(val)
+
+
+_COLUMN_INDEX: dict[str, int] = {c: i for i, c in enumerate(ALL_COLUMNS)}
+
+
+def _validate_column(name: str) -> list[str]:
+    """Return empty list if valid, else list with the invalid name."""
+    return [] if name in ALL_COLUMNS else [name]
+
+
+def _resolve_columns(
+    columns_str: str | None, column_order_str: str | None
+) -> tuple[list[str] | None, list[str]]:
+    """Return (resolved_columns, invalid_names). resolved_columns is None on error."""
+    if column_order_str is not None:
+        cols = [c.strip() for c in column_order_str.split(",") if c.strip()]
+        invalid = [c for c in cols if c not in ALL_COLUMNS]
+        if invalid:
+            return None, invalid
+        return cols, []
+
+    if columns_str is not None:
+        parts = [c.strip() for c in columns_str.split(",") if c.strip()]
+        if any(p.startswith("+") or p.startswith("-") for p in parts):
+            result = list(DEFAULT_COLUMNS)
+            for part in parts:
+                if part.startswith("+"):
+                    name = part[1:]
+                    if invalid := _validate_column(name):
+                        return None, invalid
+                    if name not in result:
+                        std_idx = _COLUMN_INDEX[name]
+                        insert_pos = len(result)
+                        for i, col in enumerate(result):
+                            if _COLUMN_INDEX[col] > std_idx:
+                                insert_pos = i
+                                break
+                        result.insert(insert_pos, name)
+                elif part.startswith("-"):
+                    name = part[1:]
+                    if invalid := _validate_column(name):
+                        return None, invalid
+                    if name in result:
+                        result.remove(name)
+            return result, []
+        else:
+            invalid = [c for c in parts if c not in ALL_COLUMNS]
+            if invalid:
+                return None, invalid
+            return parts, []
+
+    return list(DEFAULT_COLUMNS), []
+
+
+def _truncate_to_width(text: str, max_width: int) -> str:
+    width = 0
+    result = []
+    for ch in text:
+        ea = unicodedata.east_asian_width(ch)
+        char_width = 2 if ea in ("F", "W") else 1
+        if width + char_width > max_width:
+            break
+        result.append(ch)
+        width += char_width
+    return "".join(result)
 
 
 def get_log_files():
@@ -100,7 +189,12 @@ def dump_existing_logs(tracker, lines_option=None):
 
 
 class CacheTracker:
-    def __init__(self, fmt: str = "plain", since: str | None = None):
+    def __init__(
+        self,
+        fmt: str = "plain",
+        since: str | None = None,
+        columns: list[str] | None = None,
+    ):
         self.project_stats: dict[str, dict[str, int]] = {}
         self.cum_hits: int = 0
         self.cum_misses: int = 0
@@ -116,15 +210,35 @@ class CacheTracker:
         if since:
             dt = datetime.fromisoformat(since)
             self.since = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        self.columns: list[str] = (
+            columns if columns is not None else list(DEFAULT_COLUMNS)
+        )
 
         if fmt == "csv":
             self._csv_writer = csv.writer(sys.stdout)
 
     @staticmethod
+    def _format_row(columns: list[str], get_value) -> str:
+        parts = []
+        for col in columns:
+            align, width = COLUMN_SPECS[col]
+            formatted = get_value(col)
+            if width > 0:
+                parts.append(f"{formatted:{align}{width}}")
+            else:
+                parts.append(formatted)
+        return " | ".join(parts)
+
+    @staticmethod
     def _extract_text(val):
         """Extract a short text summary from various content formats."""
         if isinstance(val, str):
-            return val.replace("\n", " ").strip()
+            return (
+                val.replace("\r\n", "\\n")
+                .replace("\r", "")
+                .replace("\n", "\\n")
+                .strip()
+            )
         if isinstance(val, list):
             parts = []
             for part in val:
@@ -169,7 +283,13 @@ class CacheTracker:
                         pass  # fall back to last user prompt
                 elif isinstance(part, str):
                     parts.append(part)
-            return " ".join(p for p in parts if p).replace("\n", " ").strip()
+            return (
+                " ".join(p for p in parts if p)
+                .replace("\r\n", "\\n")
+                .replace("\r", "")
+                .replace("\n", "\\n")
+                .strip()
+            )
         return ""
 
     def _emit(self, record: dict) -> None:
@@ -180,43 +300,25 @@ class CacheTracker:
 
     def _print_record(self, record: dict) -> None:
         if self.fmt == "plain":
-            if (sys.stdout.isatty() and self.line_count % 10 == 1) or (not sys.stdout.isatty() and self.line_count == 1):
-                print("-" * 159)
-                print(HEADER)
-                print("-" * 159)
-            proj = record["project"]
-            if len(proj) > 32:
-                proj = proj[:15] + ".." + proj[-15:]
-            ts = record["timestamp"]
-            ts_display = ts
-            print(
-                f"{ts_display:<24} | "
-                f"{record['hits']:>12,} | {record['misses']:>12,} | "
-                f"{record['ratio']:>4.0f}% | "
-                f"{record['cum_hits']:>14,} | {record['cum_misses']:>14,} | "
-                f"{record['cum_ratio']:>8.0f}% | "
-                f"{proj:<32} | "
-                f"{record['content']}"
-            )
+            if (sys.stdout.isatty() and self.line_count % 10 == 1) or (
+                not sys.stdout.isatty() and self.line_count == 1
+            ):
+                header = self._format_row(self.columns, lambda c: c)
+                print("-" * len(header))
+                print(header)
+                print("-" * len(header))
+            print(self._format_row(self.columns, lambda c: _format_cell(c, record[c])))
         elif self.fmt == "csv":
             if not self._csv_header_written:
-                self._csv_writer.writerow(CSV_COLUMNS)
+                self._csv_writer.writerow(self.columns)
                 self._csv_header_written = True
-            self._csv_writer.writerow(
-                [
-                    record["timestamp"],
-                    record["hits"],
-                    record["misses"],
-                    round(record["ratio"], 2),
-                    record["cum_hits"],
-                    record["cum_misses"],
-                    round(record["cum_ratio"], 2),
-                    record["project"],
-                    record["content"],
-                ]
-            )
+            self._csv_writer.writerow([record[col] for col in self.columns])
         elif self.fmt == "json":
-            print(json.dumps(record, ensure_ascii=False))
+            print(
+                json.dumps(
+                    {col: record[col] for col in self.columns}, ensure_ascii=False
+                )
+            )
 
     def flush_buffer(self, count: int) -> None:
         records = self.output_buffer[-count:]
@@ -254,14 +356,16 @@ class CacheTracker:
                 raw = message.get("content", "")
                 content = self._extract_text(raw)
                 if content:
-                    self.last_user_content[project_name] = content[:50]
+                    self.last_user_content[project_name] = _truncate_to_width(
+                        content, COLUMN_SPECS["content"][1]
+                    )
             return
 
         # Extract content for assistant messages
         current_content = ""
         if msg_type == "assistant":
             raw = message.get("content", "")
-            current_content = self._extract_text(raw)[:50]
+            current_content = self._extract_text(raw)
         elif msg_type == "system":
             subtype = d.get("subtype", "")
             current_content = f"[system:{subtype}]" if subtype else "[system]"
@@ -302,14 +406,18 @@ class CacheTracker:
                 f"[User] {self.last_user_content.get(project_name, 'N/A')}"
             )
 
+        content_preview = _truncate_to_width(
+            content_preview, COLUMN_SPECS["content"][1]
+        )
+
         record = {
             "timestamp": timestamp,
             "hits": cr,
             "misses": cc,
             "ratio": round(ratio, 2),
-            "cum_hits": self.cum_hits,
-            "cum_misses": self.cum_misses,
-            "cum_ratio": round(cum_ratio, 2),
+            "cum-hits": self.cum_hits,
+            "cum-misses": self.cum_misses,
+            "cum-ratio": round(cum_ratio, 2),
             "project": project_name,
             "content": content_preview,
         }
@@ -339,16 +447,15 @@ class LogHandler(FileSystemEventHandler):
     def __init__(self, tracker):
         self.tracker = tracker
 
-    def on_modified(self, event):
+    def _handle_event(self, event):
         if not event.is_directory and event.src_path.endswith(".jsonl"):
             self.tracker.read_new_lines(event.src_path)
 
-    def on_created(self, event):
-        if not event.is_directory and event.src_path.endswith(".jsonl"):
-            self.tracker.read_new_lines(event.src_path)
+    on_modified = on_created = _handle_event
 
 
 @click.command()
+@click.version_option(version=pkg_version("ccctail"), message="ccctail %(version)s")
 @click.option(
     "-n",
     "--lines",
@@ -386,9 +493,44 @@ class LogHandler(FileSystemEventHandler):
     default=None,
     help="Show only entries at or after this ISO 8601 timestamp (e.g. 2026-04-01T17:59:51.854Z).",
 )
-def main(lines: str, dump_all: bool, fmt: str, do_follow: bool, since: str | None):
+@click.option(
+    "--columns",
+    "columns",
+    type=str,
+    default=None,
+    help=(
+        "Toggle columns with +name,-name,... relative to default columns "
+        f"({', '.join(DEFAULT_COLUMNS)}). "
+        f"Available: {', '.join(ALL_COLUMNS)}"
+    ),
+)
+@click.option(
+    "--column-order",
+    "column_order",
+    type=str,
+    default=None,
+    help=(
+        "Show only the listed columns in the given order (comma-separated). "
+        f"Available: {', '.join(ALL_COLUMNS)}"
+    ),
+)
+def main(
+    lines: str,
+    dump_all: bool,
+    fmt: str,
+    do_follow: bool,
+    since: str | None,
+    columns: str | None,
+    column_order: str | None,
+):
     if not TARGET_DIR.exists():
         click.echo(f"Error: Directory {TARGET_DIR} does not exist.")
+        return
+
+    col_list, invalid = _resolve_columns(columns, column_order)
+    if invalid:
+        click.echo(f"Error: Unknown column(s): {', '.join(invalid)}")
+        click.echo(f"Available columns: {', '.join(ALL_COLUMNS)}")
         return
 
     if dump_all:
@@ -399,14 +541,12 @@ def main(lines: str, dump_all: bool, fmt: str, do_follow: bool, since: str | Non
         lines_option = lines.lstrip("=")
 
     quiet = fmt != "plain"
-    follow = do_follow and fmt == "plain"
+    follow = do_follow
 
-    tracker = CacheTracker(fmt=fmt, since=since)
+    tracker = CacheTracker(fmt=fmt, since=since, columns=col_list)
 
     if not quiet:
         click.echo(f"Monitoring Claude Code cache logs in {TARGET_DIR}...")
-        # click.echo(HEADER)
-        # click.echo("-" * 132)
 
     if not quiet:
         if lines_option == "+1" or dump_all:
