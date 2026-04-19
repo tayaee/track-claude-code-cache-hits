@@ -38,6 +38,7 @@ COLUMN_SPECS: dict[str, tuple[str, int]] = {
     "cum-ratio": (">", 9),
     "project": ("<", 25),
     "content": ("<", 80),
+    "model": ("<", 30),
 }
 
 
@@ -309,14 +310,16 @@ class CacheTracker:
                 print("-" * len(header))
             print(self._format_row(self.columns, lambda c: _format_cell(c, record[c])))
         elif self.fmt == "csv":
+            cols = self.columns + ["model"]
             if not self._csv_header_written:
-                self._csv_writer.writerow(self.columns)
+                self._csv_writer.writerow(cols)
                 self._csv_header_written = True
-            self._csv_writer.writerow([record[col] for col in self.columns])
+            self._csv_writer.writerow([record.get(col, "") for col in cols])
         elif self.fmt == "json":
+            cols = self.columns + ["model"]
             print(
                 json.dumps(
-                    {col: record[col] for col in self.columns}, ensure_ascii=False
+                    {col: record.get(col, "") for col in cols}, ensure_ascii=False
                 )
             )
 
@@ -396,9 +399,12 @@ class CacheTracker:
         cum_total = self.cum_hits + self.cum_misses
         cum_ratio = (self.cum_hits / cum_total * 100) if cum_total > 0 else 0
 
+        model_name = message.get("model", "") if msg_type == "assistant" else ""
+
         if current_content:
             if msg_type == "assistant":
-                content_preview = f"[Assistant] {current_content}"
+                label = model_name if model_name else "Assistant"
+                content_preview = f"[{label}] {current_content}"
             else:
                 content_preview = current_content
         else:
@@ -420,6 +426,7 @@ class CacheTracker:
             "cum-ratio": round(cum_ratio, 2),
             "project": project_name,
             "content": content_preview,
+            "model": model_name,
         }
 
         if not self.buffering:
